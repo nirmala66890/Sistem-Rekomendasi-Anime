@@ -3,7 +3,7 @@
 // ==============================================================================
 
 export const BASE_URL = 'https://api.jikan.moe/v4';
-const FASTAPI_URL = 'http://127.0.0.1:8000/api';
+const FASTAPI_URL = "https://jikojeromi77-anime-be.hf.space";
 
 export interface Anime {
   mal_id: number;
