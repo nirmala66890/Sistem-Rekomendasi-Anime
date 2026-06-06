@@ -31,6 +31,90 @@ export interface Anime {
 // Helper fungsi delay untuk mencegah Jikan API Rate Limit 429
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * HELPER: Mengambil detail satu anime secara cerdas dari Jikan.
+ * Mengutamakan mal_id jika ada, atau menggunakan query title sebagai fallback.
+ */
+async function fetchJikanDetail(item: any): Promise<any> {
+  if (item.mal_id) {
+    const res = await fetch(`${BASE_URL}/anime/${item.mal_id}`);
+    if (!res.ok) throw new Error(`Failed fetch Jikan ID ${item.mal_id}`);
+    const json = await res.json();
+    return json.data;
+  } 
+  
+  const res = await fetch(`${BASE_URL}/anime?q=${encodeURIComponent(item.title)}&limit=1`);
+  if (!res.ok) throw new Error(`Failed fetch Jikan Title ${item.title}`);
+  const json = await res.json();
+  if (json.data && json.data.length > 0) return json.data[0];
+  
+  throw new Error("Anime tidak ditemukan di Jikan");
+}
+
+/**
+ * HELPER: Memproses pengayaan data gambar dari Jikan menggunakan sistem Batch (Paralel)
+ * Jauh lebih cepat daripada loop satu per satu (sekuensial).
+ */
+async function enrichAnimeDataBatch(recommendations: any[]): Promise<Anime[]> {
+  const finalEnrichedAnimeList: Anime[] = [];
+  const BATCH_SIZE = 3; // Mengambil 3 gambar anime sekaligus per gelombang
+
+  for (let i = 0; i < recommendations.length; i += BATCH_SIZE) {
+    const batch = recommendations.slice(i, i + BATCH_SIZE);
+    
+    const batchPromises = batch.map(async (item) => {
+      try {
+        const matchedAnime = await fetchJikanDetail(item);
+        
+        return {
+          mal_id: item.mal_id || matchedAnime.mal_id,
+          title: item.title,
+          score: item.score || matchedAnime.score,
+          synopsis: matchedAnime.synopsis || "No synopsis available.",
+          images: matchedAnime.images,
+          genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : matchedAnime.genres,
+          themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : matchedAnime.themes,
+          recommendation_source: item.recommendation_source,
+          match_percentage: item.match_percentage,
+          genre_overlap: item.genre_overlap,
+          theme_overlap: item.theme_overlap,
+          final_score: item.final_score,
+          content_score: item.content_score,
+          collaborative_score: item.collaborative_score
+        } as Anime;
+      } catch (e) {
+        console.warn(`Fallback digunakan untuk anime: ${item.title}`, e);
+        return {
+          mal_id: item.mal_id || Math.floor(Math.random() * 100000),
+          title: item.title,
+          score: item.score || 0,
+          synopsis: item.recommendation_source 
+            ? `Recommended via: ${item.recommendation_source}.`
+            : `Metadata Match: ${((item.match_percentage || 0) * 100).toFixed(1)}%.`,
+          images: {
+            jpg: {
+              image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400",
+              large_image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=600"
+            }
+          },
+          genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : [],
+          themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : [],
+          recommendation_source: item.recommendation_source
+        } as Anime;
+      }
+    });
+
+    const batchResults = await Promise.all(batchPromises);
+    finalEnrichedAnimeList.push(...batchResults);
+
+    if (i + BATCH_SIZE < recommendations.length) {
+      await delay(1000); // Jeda 1 detik antar-batch aman dari limit 429
+    }
+  }
+
+  return finalEnrichedAnimeList;
+}
+
 export async function fetchTopAnime(): Promise<Anime[]> {
   try {
     const res = await fetch(`${BASE_URL}/top/anime?limit=15`);
@@ -56,11 +140,11 @@ export async function searchAnime(query: string): Promise<Anime[]> {
 }
 
 /**
- * SKENARIO 1: Ambil Rekomendasi berdasarkan Judul + Otomatis Cari Gambar ke Jikan API
+ * SKENARIO 1: Ambil Rekomendasi berdasarkan Judul (FIXED URL dengan /api)
  */
 export async function fetchRecommendationsByTitle(title: string): Promise<Anime[]> {
   try {
-    const response = await fetch(`${FASTAPI_URL}/recommend/by-title?title=${encodeURIComponent(title)}`, {
+    const response = await fetch(`${FASTAPI_URL}/api/recommend/by-title?title=${encodeURIComponent(title)}`, {
       method: "GET",
       headers: { "Accept": "application/json" }
     });
@@ -70,59 +154,7 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
     const resultData = await response.json();
     const recommendationsFromModel = resultData.recommendations || [];
 
-    const finalEnrichedAnimeList: Anime[] = [];
-
-    // Loop data dari Python satu per satu untuk ditempelkan data gambar dari Jikan
-    for (const item of recommendationsFromModel) {
-      try {
-        const jikanRes = await fetch(`${BASE_URL}/anime?q=${encodeURIComponent(item.title)}&limit=1`);
-        if (jikanRes.ok) {
-          const jikanData = await jikanRes.json();
-          if (jikanData.data && jikanData.data.length > 0) {
-            const matchedAnime = jikanData.data[0];
-            
-            finalEnrichedAnimeList.push({
-              mal_id: item.mal_id || matchedAnime.mal_id,
-              title: item.title,
-              score: item.score || matchedAnime.score,
-              synopsis: matchedAnime.synopsis || "No synopsis available.",
-              images: matchedAnime.images, // Menggunakan gambar asli dari Jikan API
-              genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : matchedAnime.genres,
-              themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : matchedAnime.themes,
-              recommendation_source: item.recommendation_source,
-              final_score: item.final_score,
-              content_score: item.content_score,
-              collaborative_score: item.collaborative_score
-            });
-          } else {
-            throw new Error("Data Jikan tidak ditemukan");
-          }
-        } else {
-          throw new Error("Fetch Jikan gagal");
-        }
-      } catch (e) {
-        // Fallback jika koneksi internet terputus atau terkena limit Jikan
-        finalEnrichedAnimeList.push({
-          mal_id: item.mal_id || Math.floor(Math.random() * 100000),
-          title: item.title,
-          score: item.score || 0,
-          synopsis: `Recommended via: ${item.recommendation_source || 'hybrid model'}.`,
-          images: {
-            jpg: {
-              image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400",
-              large_image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=600"
-            }
-          },
-          genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : [],
-          themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : [],
-          recommendation_source: item.recommendation_source
-        });
-      }
-      // Ditingkatkan ke 1000ms (1 detik) agar Jikan API tidak memblokir request (Rate Limit 429)
-      await delay(1000);
-    }
-
-    return finalEnrichedAnimeList;
+    return await enrichAnimeDataBatch(recommendationsFromModel);
 
   } catch (error) {
     console.error("Error pada Skenario 1 (By Title):", error);
@@ -131,11 +163,11 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
 }
 
 /**
- * SKENARIO 2: Ambil Rekomendasi berdasarkan Genre/Tema + Otomatis Cari Gambar ke Jikan API
+ * SKENARIO 2: Ambil Rekomendasi berdasarkan Genre/Tema (FIXED URL dengan /api)
  */
 export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[]): Promise<Anime[]> {
   try {
-    const response = await fetch(`${FASTAPI_URL}/recommend/by-genre-theme`, {
+    const response = await fetch(`${FASTAPI_URL}/api/recommend/by-genre-theme`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -149,56 +181,7 @@ export async function fetchRecommendationsByGenreTheme(genres: string[], themes:
     const resultData = await response.json();
     const recommendationsFromModel = resultData.recommendations || [];
 
-    const finalEnrichedAnimeList: Anime[] = [];
-
-    for (const item of recommendationsFromModel) {
-      try {
-        const jikanRes = await fetch(`${BASE_URL}/anime?q=${encodeURIComponent(item.title)}&limit=1`);
-        if (jikanRes.ok) {
-          const jikanData = await jikanRes.json();
-          if (jikanData.data && jikanData.data.length > 0) {
-            const matchedAnime = jikanData.data[0];
-            
-            finalEnrichedAnimeList.push({
-              mal_id: item.mal_id || matchedAnime.mal_id,
-              title: item.title,
-              score: item.score || matchedAnime.score,
-              synopsis: matchedAnime.synopsis || "No synopsis available.",
-              images: matchedAnime.images,
-              genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : matchedAnime.genres,
-              themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : matchedAnime.themes,
-              match_percentage: item.match_percentage,
-              genre_overlap: item.genre_overlap,
-              theme_overlap: item.theme_overlap,
-              final_score: item.final_score
-            });
-          } else {
-            throw new Error("Data Jikan tidak ditemukan");
-          }
-        } else {
-          throw new Error("Fetch Jikan gagal");
-        }
-      } catch (e) {
-        finalEnrichedAnimeList.push({
-          mal_id: item.mal_id || Math.floor(Math.random() * 100000),
-          title: item.title,
-          score: item.score || 0,
-          synopsis: `Metadata Match: ${(item.match_percentage * 100).toFixed(1)}%.`,
-          images: {
-            jpg: {
-              image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400",
-              large_image_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=600"
-            }
-          },
-          genres: item.genres ? item.genres.map((g: string) => ({ name: g })) : [],
-          themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : []
-        });
-      }
-      // Ditingkatkan ke 1000ms (1 detik) agar Jikan API tidak memblokir request (Rate Limit 429)
-      await delay(1000);
-    }
-
-    return finalEnrichedAnimeList;
+    return await enrichAnimeDataBatch(recommendationsFromModel);
 
   } catch (error) {
     console.error("Error pada Skenario 2 (By Genre/Theme):", error);
