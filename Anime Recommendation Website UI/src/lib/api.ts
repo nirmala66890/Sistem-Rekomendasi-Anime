@@ -65,7 +65,7 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
       headers: { "Accept": "application/json" }
     });
 
-    if (!response.ok) throw new Error("Gagal mengambil data dari server rekomendasi lokal.");
+    if (!response.ok) throw new Error("Gagal mengambil data dari server rekomendasi.");
 
     const resultData = await response.json();
     const recommendationsFromModel = resultData.recommendations || [];
@@ -101,7 +101,7 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
           throw new Error("Fetch Jikan gagal");
         }
       } catch (e) {
-        // Fallback jika koneksi internet terputus atau terkena limit
+        // Fallback jika koneksi internet terputus atau terkena limit Jikan
         finalEnrichedAnimeList.push({
           mal_id: item.mal_id || Math.floor(Math.random() * 100000),
           title: item.title,
@@ -118,8 +118,8 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
           recommendation_source: item.recommendation_source
         });
       }
-      // Memberikan jeda waktu 300ms agar Jikan API tidak memblokir request
-      await delay(300);
+      // Ditingkatkan ke 1000ms (1 detik) agar Jikan API tidak memblokir request (Rate Limit 429)
+      await delay(1000);
     }
 
     return finalEnrichedAnimeList;
@@ -144,7 +144,7 @@ export async function fetchRecommendationsByGenreTheme(genres: string[], themes:
       body: JSON.stringify({ genres, themes })
     });
 
-    if (!response.ok) throw new Error("Gagal mengambil data filter dari server rekomendasi lokal.");
+    if (!response.ok) throw new Error("Gagal mengambil data filter dari server rekomendasi.");
 
     const resultData = await response.json();
     const recommendationsFromModel = resultData.recommendations || [];
@@ -194,7 +194,8 @@ export async function fetchRecommendationsByGenreTheme(genres: string[], themes:
           themes: item.themes ? item.themes.map((t: string) => ({ name: t })) : []
         });
       }
-      await delay(300);
+      // Ditingkatkan ke 1000ms (1 detik) agar Jikan API tidak memblokir request (Rate Limit 429)
+      await delay(1000);
     }
 
     return finalEnrichedAnimeList;
