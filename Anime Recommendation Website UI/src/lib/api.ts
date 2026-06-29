@@ -1,11 +1,11 @@
 // ==============================================================================
-// FULL CODE REVISI: SRC/LIB/API.TS (SISTEM 3 - FAST RECONCILE PURE HYBRID)
+// UPDATE CODE: SRC/LIB/API.TS (ANTI-FAIL COMPILATION FOR NETLIFY BUILD)
 // ==============================================================================
 
 export const BASE_URL = 'https://api.jikan.moe/v4';
 
-// Masukkan URL FastAPI Hugging Face khusus Sistem 3 milikmu di sini
-const FASTAPI_SYSTEM3_URL = "https://jikojeromi77-be-system3-asli.hf.space"; 
+// Sesuai dengan backend experiment / sistem yang kamu jalankan di Hugging Face
+const FASTAPI_URL = "https://jikojeromi77-anime-be.hf.space"; 
 
 export interface Anime {
   mal_id: number;
@@ -31,7 +31,7 @@ export interface Anime {
 }
 
 /**
- * HELPER SANITASI: Mengonversi format tag string literal bawaan dataset menjadi array objek
+ * HELPER: Mengubah format genre/theme dari string dataset menjadi objek array UI
  */
 function safeParseTags(tagRaw: any): { name: string }[] {
   if (!tagRaw) return [];
@@ -47,14 +47,13 @@ function safeParseTags(tagRaw: any): { name: string }[] {
         .map(t => ({ name: t }));
     }
   } catch (e) {
-    console.error("Gagal melakukan parsing tag:", e);
+    console.error("Gagal parsing tag:", e);
   }
   return [];
 }
 
 /**
- * MAPPER UTAMA: Mengubah data keluaran backend Sistem 3 (yang sudah membawa image_url)
- * langsung ke model format objek yang dikenali oleh UI React secara kilat.
+ * MAPPER: Mapping kilat data dari FastAPI (yang sudah bawa image_url dari CSV) ke UI
  */
 function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
   if (!Array.isArray(recommendations)) return [];
@@ -62,15 +61,13 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
   return recommendations.map((item) => {
     const parsedGenres = safeParseTags(item.genres);
     const parsedThemes = safeParseTags(item.themes);
-    
-    // Membaca properti image_url hasil lookup dataset katalog baru di main.py
     const directImageUrl = item.image_url || "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400";
 
     return {
       mal_id: item.mal_id || Math.floor(Math.random() * 100000),
       title: item.title,
       score: item.score || 0,
-      synopsis: item.synopsis || `Recommended via Pure Hybrid Filtering (System 3).`,
+      synopsis: item.synopsis || `Recommended via Hybrid Filtering.`,
       images: {
         jpg: {
           image_url: directImageUrl,
@@ -79,7 +76,7 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
       },
       genres: parsedGenres,
       themes: parsedThemes,
-      recommendation_source: item.recommendation_source || "Pure Hybrid",
+      recommendation_source: item.recommendation_source || "Hybrid",
       final_score: item.final_score,
       content_score: item.content_score,
       collaborative_score: item.collaborative_score
@@ -87,17 +84,20 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
   });
 }
 
-// ==============================================================================
-// METHOD COMPATIBILITY STUB (DIRETAIN AGAR COMPONENT LAIN TIDAK EROR)
-// ==============================================================================
+/**
+ * STUB FUNCTIONS (Wajib ada agar halaman / komponen lain tidak error saat build compile)
+ */
 export async function enrichAnimeDataBatch(recommendations: any[]): Promise<Anime[]> {
   return mapBackendToFrontendModel(recommendations);
 }
+
 export async function fetchJikanDetail(item: any): Promise<any> {
   return item;
 }
-// ==============================================================================
 
+/**
+ * JIKAN API FETCHERS (Untuk halaman Beranda / Top Anime)
+ */
 export async function fetchTopAnime(): Promise<Anime[]> {
   try {
     const res = await fetch(`${BASE_URL}/top/anime?limit=15`);
@@ -123,29 +123,56 @@ export async function searchAnime(query: string): Promise<Anime[]> {
 }
 
 /**
- * SKENARIO 1 SISTEM 3: Ambil Rekomendasi berdasarkan Judul (Pure Hybrid - TOP 20)
+ * SKENARIO 1: Ambil Rekomendasi berdasarkan Judul (Mendukung Top 20 secara dinamis)
  */
 export async function fetchRecommendationsByTitle(title: string): Promise<Anime[]> {
   try {
     const timestamp = new Date().getTime();
-    // Memanggil endpoint baru /recommend sesuai main.py Sistem 3 barumu
-    const url = `${FASTAPI_SYSTEM3_URL}/recommend?title=${encodeURIComponent(title)}&alpha=0.7&top_n=20&_cb=${timestamp}`;
+    // Menembak endpoint backend hibrida kamu
+    const url = `${FASTAPI_URL}/api/recommend/by-title?title=${encodeURIComponent(title)}&_cb=${timestamp}`;
 
     const response = await fetch(url, {
       method: "GET",
       headers: { "Accept": "application/json" }
     });
 
-    if (!response.ok) throw new Error("Gagal mengambil data dari server rekomendasi Sistem 3.");
+    if (!response.ok) throw new Error("Gagal mengambil data dari server rekomendasi.");
 
     const resultData = await response.json();
-    const recommendationsFromModel = resultData && resultData.data ? resultData.data : [];
+    // Mengakomodasi jika key-nya berupa 'recommendations' atau data array murni
+    const recommendationsFromModel = resultData.recommendations || resultData.data || [];
 
-    // Langsung dipetakan secara lokal tanpa melakukan hit ulang ke Jikan API
     return mapBackendToFrontendModel(recommendationsFromModel);
 
   } catch (error) {
-    console.error("Error pada Skenario 1 (By Title) Sistem 3:", error);
+    console.error("Error pada Skenario 1 (By Title):", error);
+    return getMockAnimeList().slice(0, 15);
+  }
+}
+
+/**
+ * SKENARIO 2: Ambil Rekomendasi berdasarkan Genre/Tema
+ */
+export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[]): Promise<Anime[]> {
+  try {
+    const response = await fetch(`${FASTAPI_URL}/api/recommend/by-genre-theme`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({ genres, themes })
+    });
+
+    if (!response.ok) throw new Error("Gagal mengambil data filter dari server rekomendasi.");
+
+    const resultData = await response.json();
+    const recommendationsFromModel = resultData.recommendations || resultData.data || [];
+
+    return mapBackendToFrontendModel(recommendationsFromModel);
+
+  } catch (error) {
+    console.error("Error pada Skenario 2 (By Genre/Theme):", error);
     return getMockAnimeList().slice(0, 15);
   }
 }
@@ -163,4 +190,3 @@ function getMockAnimeList(): Anime[] {
     }
   ];
 }
-
