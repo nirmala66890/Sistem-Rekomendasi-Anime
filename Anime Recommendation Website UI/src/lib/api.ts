@@ -1,5 +1,5 @@
 // ==============================================================================
-// FULL CODE REVISI FINAL: SRC/LIB/API.TS (SISTEM 3 - PURE HYBRID SINKRON)
+// FULL CODE REVISI FINAL: SRC/LIB/API.TS (SISTEM 3 - PURE HYBRID SINKRON TOTAL)
 // ==============================================================================
 
 export const BASE_URL = 'https://api.jikan.moe/v4';
@@ -23,12 +23,13 @@ export interface Anime {
   
   recommendation_source?: string;
   final_score?: number;
-  content_score?: number;
-  collaborative_score?: number;
+  cbf_score?: number;
+  cf_score?: number;
 }
 
 /**
  * HELPER SANITASI: Mengubah raw metadata genres/themes dari backend menjadi format array objek UI.
+ * Kebal terhadap tanda kutip tunggal (') maupun ganda (") dari output dataframe.
  */
 function safeParseTags(tagRaw: any): { name: string }[] {
   if (!tagRaw) return [];
@@ -37,7 +38,7 @@ function safeParseTags(tagRaw: any): { name: string }[] {
   }
   try {
     if (typeof tagRaw === 'string') {
-      const cleaned = tagRaw.replace(/[\[\]']/g, '').split(',');
+      const cleaned = tagRaw.replace(/[\[\]'"]/g, '').split(',');
       return cleaned
         .map(t => t.trim())
         .filter(t => t.length > 0)
@@ -61,8 +62,8 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
     const directImageUrl = item.image_url || "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400";
 
     return {
-      mal_id: item.mal_id,
-      title: item.title,
+      mal_id: item.mal_id ? Number(item.mal_id) : Math.floor(Math.random() * 100000),
+      title: item.title || "Untitled Anime",
       score: item.score || 0,
       synopsis: item.synopsis || `Recommended via Pure Hybrid Filtering (System 3).`,
       images: {
@@ -73,27 +74,24 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
       },
       genres: parsedGenres,
       themes: parsedThemes,
-      recommendation_source: "Pure Hybrid",
+      recommendation_source: "Pure Hybrid (Sistem 3)",
       final_score: item.final_score,
-      content_score: item.content_score,
-      collaborative_score: item.collaborative_score
+      cbf_score: item.cbf_score,
+      cf_score: item.cf_score
     } as Anime;
   });
 }
 
 // ==============================================================================
-// METHOD COMPATIBILITY STUB (DIRETAIN AGAR COMPONENT LAIN TIDAK ERROR SAAT COMPILE)
+// METHOD COMPATIBILITY STUB & ENRICHMENT
 // ==============================================================================
 export async function enrichAnimeDataBatch(recommendations: any[]): Promise<Anime[]> {
   return mapBackendToFrontendModel(recommendations);
 }
+
 export async function fetchJikanDetail(item: any): Promise<any> {
   return item;
 }
-export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[]): Promise<Anime[]> {
-  return [];
-}
-// ==============================================================================
 
 export async function fetchTopAnime(): Promise<Anime[]> {
   try {
@@ -120,7 +118,7 @@ export async function searchAnime(query: string): Promise<Anime[]> {
 }
 
 /**
- * SKENARIO 1 SISTEM 3: Hit langsung ke endpoint /recommend (Mendukung TOP 20 instan)
+ * SKENARIO 1 SISTEM 3: Hit langsung ke endpoint /recommend (Mendukung TOP 20 Berbasis Hybrid Judul)
  */
 export async function fetchRecommendationsByTitle(title: string): Promise<Anime[]> {
   try {
@@ -140,8 +138,39 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
     return mapBackendToFrontendModel(recommendationsFromModel);
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("API Error pada Skenario 1 (By Title):", error);
     return getMockAnimeList();
+  }
+}
+
+/**
+ * SKENARIO 2 SISTEM 3: Hit langsung ke endpoint /catalog (Aktif Kembali untuk Filter Genre & Themes)
+ */
+export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[]): Promise<Anime[]> {
+  try {
+    const combinedTags = [...genres, ...themes];
+    if (combinedTags.length === 0) return [];
+
+    const timestamp = new Date().getTime();
+    // Mengonversi array tag menjadi query params bertumpuk ?tags=Action&tags=Comedy sesuai endpoint FastAPI kita
+    const queryParams = combinedTags.map(tag => `tags=${encodeURIComponent(tag)}`).join('&');
+    const url = `${FASTAPI_URL}/catalog?${queryParams}&top_n=20&_cb=${timestamp}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Accept": "application/json" }
+    });
+
+    if (!response.ok) throw new Error("Gagal mengambil data katalog filter dari server Sistem 3.");
+
+    const resultData = await response.json();
+    const recommendationsFromModel = resultData && resultData.data ? resultData.data : [];
+
+    return mapBackendToFrontendModel(recommendationsFromModel);
+
+  } catch (error) {
+    console.error("API Error pada Skenario 2 (Catalog Filter):", error);
+    return [];
   }
 }
 
