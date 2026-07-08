@@ -1,9 +1,9 @@
 // ==============================================================================
-// SRC/LIB/API.TS - SINKRONISASI BACKEND V4 (MODEL4.JOBLIB)
+// SRC/LIB/API.TS - SINKRONISASI BACKEND BARU (itsmeh-anime-be3)
 // ==============================================================================
 
 export const BASE_URL = 'https://api.jikan.moe/v4';
-const FASTAPI_URL = "https://jikojeromi77-anime-be.hf.space"; 
+const FASTAPI_URL = "https://itsmeh-anime-be3.hf.space"; 
 
 export interface Anime {
   mal_id: number;
@@ -32,6 +32,7 @@ function safeParseTags(tagRaw: any): { name: string }[] {
   }
   try {
     if (typeof tagRaw === 'string') {
+      // Menangani format string python list jika ada
       const cleaned = tagRaw.replace(/[\[\]'"]/g, '').split(',');
       return cleaned.map(t => t.trim()).filter(t => t.length > 0).map(t => ({ name: t }));
     }
@@ -48,6 +49,7 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
   if (!Array.isArray(recommendations)) return [];
   
   return recommendations.map((item) => {
+    // Sesuaikan field jika backend mengirim field yang berbeda
     const directImageUrl = item.image_url || "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400";
 
     return {
@@ -63,8 +65,8 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
       },
       genres: safeParseTags(item.genres),
       themes: safeParseTags(item.themes),
-      recommendation_source: "Hybrid Model v4",
-      final_score: item.final_score
+      recommendation_source: "Hybrid Model",
+      final_score: item.hybrid_score || item.score
     } as Anime;
   });
 }
@@ -76,10 +78,9 @@ function mapBackendToFrontendModel(recommendations: any[]): Anime[] {
 /**
  * Skenario 1: Hybrid Recommendation By Title
  */
-export async function fetchRecommendationsByTitle(title: string): Promise<Anime[]> {
+export async function fetchRecommendationsByTitle(title: string, top_n: number = 20): Promise<Anime[]> {
   try {
-    // alpha diset 0.5 sesuai setting model4
-    const url = `${FASTAPI_URL}/recommend?title=${encodeURIComponent(title)}&alpha=0.5&top_n=20&_cb=${new Date().getTime()}`;
+    const url = `${FASTAPI_URL}/recommend?title=${encodeURIComponent(title)}&top_n=${top_n}`;
 
     const response = await fetch(url, { headers: { "Accept": "application/json" } });
     if (!response.ok) throw new Error("Backend Error");
@@ -93,15 +94,18 @@ export async function fetchRecommendationsByTitle(title: string): Promise<Anime[
 }
 
 /**
- * Skenario 2: Filter Katalog Genre & Themes
+ * Skenario 2: Filter Katalog Genre & Themes (Menggunakan endpoint /search)
  */
-export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[]): Promise<Anime[]> {
+export async function fetchRecommendationsByGenreTheme(genres: string[], themes: string[], top_n: number = 20): Promise<Anime[]> {
   try {
-    const combinedTags = [...genres, ...themes];
-    if (combinedTags.length === 0) return [];
+    if (genres.length === 0 && themes.length === 0) return [];
 
-    const queryParams = combinedTags.map(tag => `tags=${encodeURIComponent(tag)}`).join('&');
-    const url = `${FASTAPI_URL}/catalog?${queryParams}&top_n=20&_cb=${new Date().getTime()}`;
+    const params = new URLSearchParams();
+    genres.forEach(g => params.append('genre', g));
+    themes.forEach(t => params.append('themes', t));
+    params.append('top_n', top_n.toString());
+
+    const url = `${FASTAPI_URL}/search?${params.toString()}`;
 
     const response = await fetch(url, { headers: { "Accept": "application/json" } });
     if (!response.ok) throw new Error("Backend Catalog Error");
@@ -110,6 +114,20 @@ export async function fetchRecommendationsByGenreTheme(genres: string[], themes:
     return mapBackendToFrontendModel(result.data || []);
   } catch (error) {
     console.error("Error fetching catalog filter:", error);
+    return [];
+  }
+}
+
+/**
+ * Skenario 3: Fetch Katalog Umum (Top N)
+ */
+export async function fetchCatalog(top_n: number = 20): Promise<Anime[]> {
+  try {
+    const response = await fetch(`${FASTAPI_URL}/catalog?top_n=${top_n}`);
+    const result = await response.json();
+    return mapBackendToFrontendModel(result.data || []);
+  } catch (error) {
+    console.error("Error fetching catalog:", error);
     return [];
   }
 }
@@ -134,3 +152,4 @@ export async function searchAnime(query: string): Promise<Anime[]> {
     return [];
   }
 }
+
